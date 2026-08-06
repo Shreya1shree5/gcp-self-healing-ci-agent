@@ -1,0 +1,49 @@
+name: Self-Heal
+
+# No persistent service here, deliberately — this is a one-shot batch job
+# triggered by a CI failure, not a request/response API like the RAG or
+# FinOps agents needed. Cloud Run would be the wrong tool for this shape
+# of workload; a GitHub Action calling Vertex AI directly via Workload
+# Identity Federation is right-sized instead.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write # required for Workload Identity Federation
+
+jobs:
+  heal:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the branch that actually failed
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: Authenticate to GCP (Workload Identity Federation, no static keys)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_HEALER_SA }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tool dependencies
+        run: |
+          pip install ruff mypy pytest
+          pip install -r agent/requirements.txt
+
+      - name: Run self-healing agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          BASE_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: python -m agent.main ${{ github.event.workflow_run.id }}
