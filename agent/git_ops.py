@@ -17,8 +17,17 @@ def create_branch(name: str) -> None:
 
 
 def commit_all(message: str) -> bool:
-    """Returns False if there was nothing to commit (fix produced no diff)."""
-    run("git", "add", "-A")
+    """Returns False if there was nothing to commit (fix produced no diff).
+
+    Deliberately `git add target-repo/`, never `git add -A` — the workspace
+    root also holds things the fixers never touch, including the WIF
+    credential config google-github-actions/auth writes directly into
+    GITHUB_WORKSPACE (gha-creds-*.json). A blanket `-A` would happily stage
+    and commit that (or any other stray file a future tool drops here)
+    straight into a PR. Scoping to the one directory fixers actually write
+    to makes that class of bug structurally impossible, not just unlikely.
+    """
+    run("git", "add", "target-repo/")
     status = run("git", "status", "--porcelain")
     if not status.strip():
         return False

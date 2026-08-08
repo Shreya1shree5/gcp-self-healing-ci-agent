@@ -5,3 +5,9 @@ venv/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+
+# WIF credential config google-github-actions/auth writes directly into
+# GITHUB_WORKSPACE — should never be committable even if commit_all()'s
+# path scoping were ever changed or bypassed. Defense in depth, not the
+# primary fix (see git_ops.py).
+gha-creds-*.json
