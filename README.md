@@ -113,12 +113,30 @@ commit), which triggers `self-heal.yml` automatically. Watch the Actions tab; wi
 minutes you should see a new PR titled `Self-heal: fix build, lint, typecheck, test` with a
 body listing what was fixed and confirming full validation.
 
+## How file targeting actually works (`agent/locate.py`)
+
+Nothing in this codebase hardcodes which file has the bug — `agent/main.py` doesn't know
+`calculator.py` or `report.py` exist. Each category's failure output is parsed deterministically
+(regex, not an LLM guess, since the tool already prints the file path in structured form) to
+discover which file(s) are implicated, fresh on every retry:
+
+- **ruff** prints `--> path/to/file.py:LINE:COL` under every finding — trivial to extract
+- **mypy** prints `path/to/file.py:LINE: error: ...` at the start of each error line
+- **build/import** failures need two things from a traceback: the file with the bad import, *and*
+  — for a genuinely missing module — the expected path of a file that needs to be **created**,
+  which by definition can't appear in any traceback since it doesn't exist yet. Parsed from
+  `ModuleNotFoundError: No module named 'x.y'` → `x/y.py`.
+- **pytest** is the hardest case — a plain assertion mismatch doesn't traceback into source. The
+  heuristic: extract function names called in the failing assertion, then search the source tree
+  (excluding `tests/`) for where each is actually `def`-ined. Not a guarantee — a bug in a
+  function neither called directly in the assertion nor easily greppable would need a smarter
+  approach — but it correctly handles the common case, and is honest about its own limits.
+
 ## Known rough edges
 
-- **File targeting is hardcoded** to this demo repo's known structure (`FIXERS` dict in
-  `agent/main.py` hardcodes which file each category should look at). A general-purpose version
-  would need to parse tracebacks/lint output to locate implicated files dynamically instead.
-- **No handling for multi-file bugs** — each fixer currently only reads/writes the one file it's
-  told about; a bug spanning multiple files would need a fixer redesign.
+- **No handling for multi-file bugs** — each fixer currently reads/writes whatever `locate.py`
+  found, but a bug whose fix genuinely spans files neither locator variant catches would need a
+  fixer redesign.
+- **The pytest locator is a heuristic**, not a guarantee — see above.
 - **Retry budget is small (2)** — tuned for a demo; a real deployment might want more retries
   with a cost/time ceiling instead of a fixed count.

@@ -11,7 +11,7 @@ Usage: python -m agent.main <failed_run_id>
 import os
 import sys
 
-from . import checks, gh_api, git_ops
+from . import checks, gh_api, git_ops, locate
 from .fixers import build_fixer, lint_fixer, test_fixer, type_fixer
 
 MAX_RETRIES = 2
@@ -21,11 +21,15 @@ MAX_RETRIES = 2
 # the branch that actually failed.
 BASE_BRANCH = os.environ["BASE_BRANCH"]
 
+# No hardcoded file paths — which file(s) are relevant is discovered fresh
+# from each failure's actual error output via agent/locate.py. This is what
+# lets the agent generalize to a repo it's never seen, instead of only
+# working because a developer already knew where the four demo bugs live.
 FIXERS = {
-    "lint": (lint_fixer, ["target-repo/mathutils/calculator.py"]),
-    "typecheck": (type_fixer, ["target-repo/mathutils/calculator.py"]),
-    "test": (test_fixer, ["target-repo/mathutils/calculator.py"]),
-    "build": (build_fixer, ["target-repo/cli/report.py"]),
+    "lint": lint_fixer,
+    "typecheck": type_fixer,
+    "test": test_fixer,
+    "build": build_fixer,
 }
 
 # Fix build/import errors first — a broken import can mask what the other
@@ -51,11 +55,20 @@ def write_files(files: dict[str, str]) -> None:
 
 
 def attempt_fix(check_name: str, log_output: str) -> bool:
-    fixer_module, relevant_paths = FIXERS[check_name]
-    files = read_files(relevant_paths)
+    fixer_module = FIXERS[check_name]
+    locator = locate.LOCATORS[check_name]
 
     for attempt in range(1, MAX_RETRIES + 1):
-        print(f"  [{check_name}] attempt {attempt}/{MAX_RETRIES}")
+        # Re-locate on every attempt, not just the first — if a fix was
+        # wrong and the retry's log_output points somewhere new, the file
+        # set should follow the evidence, not stay pinned to the first guess.
+        relevant_paths = locator(log_output)
+        if not relevant_paths:
+            print(f"  [{check_name}] could not identify which file(s) this failure implicates — giving up.")
+            return False
+        print(f"  [{check_name}] attempt {attempt}/{MAX_RETRIES} — implicated file(s): {relevant_paths}")
+
+        files = read_files(relevant_paths)
         try:
             fixed = fixer_module.fix(log_output, files)
         except ValueError as e:
